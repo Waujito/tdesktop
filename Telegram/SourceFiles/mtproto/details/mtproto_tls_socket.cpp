@@ -35,11 +35,14 @@ const auto kClientHeader = qstr("\x17\x03\x03");
 using BigNum = openssl::BigNum;
 using BigNumContext = openssl::Context;
 
-[[nodiscard]] MTPTlsClientHello PrepareClientHelloRules() {
-	using Scope = QVector<MTPTlsBlock>;
-	using Permutation = std::vector<Scope>;
-	using StackElement = std::variant<Scope, Permutation>;
-	auto stack = std::vector<StackElement>();
+using Scope = QVector<MTPTlsBlock>;
+using Permutation = std::vector<Scope>;
+using StackElement = std::variant<Scope, Permutation>;
+
+#define RULEGEN_MACRO_NAMES pushToBack, S, Z, G, R, D, K, M, E, P,	\
+			OpenScope, CloseScope, OpenPermutation, ClosePermutation, StartPermutationElement, Finish
+
+auto initRuleMacros(std::vector<StackElement> &stack) {
 	const auto pushToBack = [&](MTPTlsBlock &&block) {
 		Expects(!stack.empty());
 
@@ -120,7 +123,14 @@ using BigNumContext = openssl::Context;
 		return v::get<Scope>(stack.back());
 	};
 
+	return std::make_tuple(RULEGEN_MACRO_NAMES);
+}
+
+[[nodiscard,maybe_unused]] MTPTlsClientHello PrepareClientHelloChromeRules() {
+	auto stack = std::vector<StackElement>();
 	stack.emplace_back(Scope());
+
+	auto [RULEGEN_MACRO_NAMES] = initRuleMacros(stack);
 
 	S("\x16\x03\x01"_q);
 	OpenScope();
@@ -229,6 +239,123 @@ using BigNumContext = openssl::Context;
 
 	return MTP_tlsClientHello(MTP_vector<MTPTlsBlock>(Finish()));
 }
+
+[[nodiscard,maybe_unused]] MTPTlsClientHello PrepareClientHelloFirefoxRules() {
+	auto stack = std::vector<StackElement>();
+	stack.emplace_back(Scope());
+
+	auto [RULEGEN_MACRO_NAMES] = initRuleMacros(stack);
+
+	S("\x16\x03\x01"_q);
+	OpenScope();
+	S("\x01\x00"_q);
+	OpenScope();
+	S("\x03\x03"_q);
+	Z(32);
+	S("\x20"_q);
+	R(32);
+	S("\x00\x20"_q);
+	S(""
+	        "\x13\x01\x13\x03\x13\x02\xc0\x2b\xc0\x2f\xcc\xa9\xcc\xa8\xc0\x2c"
+		"\xc0\x30\xc0\x0a\xc0\x13\xc0\x14\x00\x9c\x00\x9d\x00\x2f\x00\x35"
+		""_q);
+	S("\x01\x00"_q);
+	OpenScope();
+	{
+		// sni
+		{
+			S("\x00\x00"_q);
+			OpenScope();
+			OpenScope();
+			S("\x00"_q);
+			OpenScope();
+			D();
+			CloseScope();
+			CloseScope();
+			CloseScope();
+		}
+
+		// extended master secret
+		S("\x00\x17\x00\x00"_q);
+
+		// renegotiation info
+		S("\xff\x01\x00\x01\x00"_q);
+
+		// supported groups
+		S(""
+			"\x00\x0a\x00\x10\x00\x0e\x11\xec\x00\x1d\x00\x17\x00\x18"
+			"\x00\x19\x01\x00\x01\x01"_q);
+
+		// ec point formats
+		S("\x00\x0b\x00\x02\x01\x00"_q);
+
+		// session ticket
+		S("\x00\x23\x00\x00"_q);
+
+		// application layer protocol negotiation
+		S(""
+			"\x00\x10\x00\x0e\x00\x0c\x02\x68\x32\x08\x68\x74\x74\x70"
+			"\x2f\x31\x2e\x31"_q);
+
+		// status request
+		S("\x00\x05\x00\x05\x01\x00\x00\x00\x00"_q);
+
+		// delegated credentials
+		S("\x00\x22\x00\x0a\x00\x08\x04\x03\x05\x03\x06\x03\x02\x03"_q);
+
+		// signed certificate timestamp
+		S("\x00\x12\x00\x00"_q);
+
+		// key share
+		S("\x00\x33\x05\x2f\x05\x2d"_q);
+		S("\x11\xec\x04\xc0"_q);
+		M();
+		K();
+		S("\x00\x1d\x00\x20"_q);
+		K();
+		S("\x00\x17\x00\x41"_q);
+		// secp256r1 key share entry
+		S("\x04"_q);
+		// is it R?
+		R(64);
+
+		// supported versions
+		S("\x00\x2b\x00\x05\x04\x03\x04\x03\x03"_q);
+
+		// signature algorithms
+		S(""
+			"\x00\x0d\x00\x18\x00\x16\x04\x03\x05\x03\x06\x03\x08\x04"
+			"\x08\x05\x08\x06\x04\x01\x05\x01\x06\x01\x02\x03\x02\x01"_q);
+
+		// psk key exchange modes
+		S("\x00\x2d\x00\x02\x01\x01"_q);
+
+		// record size limit
+		S("\x00\x1c\x00\x02\x40\x01"_q);
+
+		// compress certificate
+		S("\x00\x1b\x00\x07\x06\x00\x01\x00\x02\x00\x03"_q);
+
+		// encrypted client hello
+		S("\xfe\x0d"_q);
+		OpenScope();
+		S("\x00\x00\x01\x00\x01"_q);
+		R(1);
+		S("\x00\x20"_q);
+		R(32);
+		S("\x00\xef"_q);
+		// Seems like length of ECH payload is not randomized in Firefox
+		R(239);
+		CloseScope();
+	}
+	CloseScope();
+	CloseScope();
+	CloseScope();
+
+	return MTP_tlsClientHello(MTP_vector<MTPTlsBlock>(Finish()));
+}
+
+constexpr auto PrepareClientHelloRules = PrepareClientHelloFirefoxRules;
 
 [[nodiscard]] bytes::vector PrepareGreases() {
 	auto result = bytes::vector(kMaxGrease);
